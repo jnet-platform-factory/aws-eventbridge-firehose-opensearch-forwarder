@@ -1,0 +1,122 @@
+name: Create Release
+
+# Tags main as vX.Y.Z and creates the GitHub release. X.Y.Z is not chosen here:
+# it is the SemanticVersion in template.yaml, because a release of this
+# repository and the SAR version built from it must carry the same number (see
+# "Releasing" in the README). Bump SemanticVersion in a pull request, merge,
+# then run this.
+#
+# It does not publish to the Serverless Application Repository. That needs AWS
+# credentials, which this public repository does not hold; whoever publishes
+# builds from the tag this creates.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - name: Refuse anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases are cut from main only; this run is on ${{ github.ref }}."
+          exit 1
+      - uses: actions/checkout@v4
+      - name: Read SemanticVersion and check the tag is free
+        id: v
+        run: |
+          # The one SemanticVersion key in template.yaml (comments mention the
+          # word but never as a key).
+          MATCHES=$(grep -cE '^[[:space:]]+SemanticVersion:' template.yaml || true)
+          if [ "$MATCHES" != "1" ]; then
+            echo "::error::Expected exactly one SemanticVersion key in template.yaml, found $MATCHES."
+            exit 1
+          fi
+          VERSION=$(sed -nE 's/^[[:space:]]+SemanticVersion:[[:space:]]*([^[:space:]#]+).*/\1/p' template.yaml)
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::SemanticVersion '$VERSION' is not X.Y.Z."
+            exit 1
+          fi
+          TAG="v$VERSION"
+          # A version is released once. Re-running without a bump is the usual
+          # mistake, and moving an existing tag would change what every pin on
+          # it builds.
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG already exists. Bump SemanticVersion in template.yaml (and the quick start in README.md) in a pull request first."
+            exit 1
+          fi
+          echo "Releasing $TAG from ${{ github.sha }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  # The same gates as every pull request, on the exact commit being tagged.
+  check:
+    name: Gates
+    needs: [version]
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  release:
+    name: Tag and release
+    needs: [version, check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      url: ${{ steps.r.outputs.url }}
+    steps:
+      # No checkout: the tag is created on the dispatched commit by SHA, so
+      # nothing from the working tree is needed and no token is persisted.
+      - name: Create tag and release
+        id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          NOTES="SemanticVersion **${VERSION}**, commit \`${SHA}\`.
+
+          Pin the full SHA when a build must be reproducible (a tag can move, a SHA cannot), and record the tag beside it. Deploying from SAR, pin \`SemanticVersion: ${VERSION}\` once it is published in your region."
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --target "$SHA" \
+            --title "$TAG" \
+            --notes "$NOTES" \
+            --generate-notes \
+            --latest
+          echo "url=${{ github.server_url }}/${REPO}/releases/tag/${TAG}" >> "$GITHUB_OUTPUT"
+
+  # A job of its own: the action is pinned to a movable tag, so it runs where
+  # no write token exists.
+  summary:
+    name: Summary
+    needs: [version, check, release]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Summary
+        if: always()
+        continue-on-error: true
+        uses: jnet-platform-factory/.github/actions/job-summary@v0.0.1
+        with:
+          title: Create release — ${{ needs.version.outputs.tag || 'version not resolved' }}
+          needs: ${{ toJSON(needs) }}
+          rows: |
+            Release: ${{ needs.release.outputs.url && format('[{0}]({1})', needs.version.outputs.tag, needs.release.outputs.url) || '' }}
+            SemanticVersion: ${{ needs.version.outputs.version }}
+            Commit: ${{ github.sha }}
