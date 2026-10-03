@@ -1,6 +1,8 @@
 # SAM build artifacts
 .aws-sam/
 packaged.yaml
+packaged-*.yaml
+samconfig.local.toml
 
 # Python
 __pycache__/
@@ -8,10 +10,15 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.pytest_cache/
 
 # Local env / secrets
 .env
 .env.*
+
+# Optional extra deny-list for scripts/leak-check.py. Never commit it: it names
+# what must not be published.
+.leak-check-deny
 
 # OS / editor
 .DS_Store

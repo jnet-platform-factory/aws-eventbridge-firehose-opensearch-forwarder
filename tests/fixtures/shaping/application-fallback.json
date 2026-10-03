@@ -1,0 +1,8 @@
+{
+  "defaults": {
+    "environment": "unknown",
+    "application": "acme",
+    "organization": "default_org",
+    "username": "default_user"
+  }
+}
