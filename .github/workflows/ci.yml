@@ -2,11 +2,15 @@ name: CI
 
 # Every gate that needs no AWS credentials, on every pull request and push.
 # Nothing here deploys or publishes.
+#
+# Also callable, so release.yml runs exactly these gates on the commit it is
+# about to tag rather than a copy that could drift.
 
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read

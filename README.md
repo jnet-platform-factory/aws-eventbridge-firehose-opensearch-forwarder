@@ -588,6 +588,9 @@ Test fixtures that must contain a forbidden shape assemble it at runtime; see
 `main`: the leak gate, both test lanes, the SAR metadata check and
 `sam validate --lint`. It needs no AWS credentials and publishes nothing.
 
+`.github/workflows/release.yml` (**Create Release**, run by hand) tags `main`
+and creates the GitHub release; see below.
+
 ## Releasing
 
 A release is a git tag, `vX.Y.Z`, equal to the `SemanticVersion` in
@@ -599,7 +602,11 @@ this repository being the source, and is not a release of this code.
    published version is immutable, so a version that has ever been published
    cannot be reused.
 2. Merge to `main`.
-3. Tag the merge commit `vX.Y.Z` and push the tag.
+3. Run **Create Release** (Actions → Create Release → Run workflow, on `main`).
+   It reads `SemanticVersion` from `template.yaml`, refuses if `vX.Y.Z` already
+   exists, runs the CI gates on that exact commit, then creates the tag and the
+   GitHub release. There is no version input: the number is the one in the
+   template, so the tag and the SAR version cannot disagree.
 4. Publish that tag to SAR, once per region that deploys it: a SAR application
    exists only in the region it was published to. From a checkout of the tag,
    `make release S3_BUCKET=<artifact bucket in that region> REGION=<region>` runs
