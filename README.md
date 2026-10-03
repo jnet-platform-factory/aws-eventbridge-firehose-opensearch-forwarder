@@ -637,16 +637,16 @@ A release is a git tag, `vX.Y.Z`, equal to the `SemanticVersion` in
 `template.yaml`. Version numbers come from the SAR listing: tag `v0.0.1` predates
 this repository being the source, and is not a release of this code.
 
-1. In the pull request, bump `SemanticVersion` in `template.yaml` and the version
-   in the quick start above. `make check-metadata` fails if they disagree. A
-   published version is immutable, so a version that has ever been published
-   cannot be reused.
-2. Merge to `main`.
-3. Run **Create Release** (Actions → Create Release → Run workflow, on `main`).
-   It reads `SemanticVersion` from `template.yaml`, refuses if `vX.Y.Z` already
-   exists, runs the CI gates on that exact commit, then creates the tag and the
-   GitHub release. There is no version input: the number is the one in the
-   template, so the tag and the SAR version cannot disagree.
+1. Merge your changes to `main`. Don't touch the version.
+2. Run **Create Release** (Actions → Create Release → Run workflow, on `main`) and
+   choose **How to bump the version?**: `patch`, `minor` or `major`, as in every
+   other platform repository.
+3. It computes the next version from `SemanticVersion` in `template.yaml`,
+   refuses if `vX.Y.Z` already exists, and runs the CI gates. It then writes the
+   new version to `template.yaml` and the quick start above in one
+   `Release vX.Y.Z` commit on `main`, tags that commit, and creates the GitHub
+   release. The tag and the SAR version cannot disagree. A published version is
+   immutable, so a version that has ever been published is never reused.
 4. Publishing follows on its own: Create Release dispatches **Publish to SAR**
    on the new tag (so does pushing a `v*` tag by hand). It reruns the gates on
    the tag, builds in a container, checks the built artifact carries its
