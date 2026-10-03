@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# serverless-events-observability — validate / test / build / package / publish
+# AWS-EventBridge-Firehose-OpenSearch-Forwarder — validate / test / build / package / publish
 # to the AWS Serverless Application Repository.
 #
 # This repository is the product's source. Consumers deploy a published SAR
@@ -15,7 +15,7 @@
 #   make package AWS_VAULT=my-profile S3_BUCKET=...
 # ---------------------------------------------------------------------------
 
-APP_NAME   := serverless-events-observability
+APP_NAME   := AWS-EventBridge-Firehose-OpenSearch-Forwarder
 REGION     ?= us-east-1
 STACK_NAME ?= events-observability-test
 S3_BUCKET  ?=
