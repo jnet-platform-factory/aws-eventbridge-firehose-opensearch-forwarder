@@ -6,9 +6,10 @@ name: Create Release
 # "Releasing" in the README). Bump SemanticVersion in a pull request, merge,
 # then run this.
 #
-# It does not publish to the Serverless Application Repository. That needs AWS
-# credentials, which this public repository does not hold; whoever publishes
-# builds from the tag this creates.
+# Then it hands the tag to publish.yml, which publishes it to the Serverless
+# Application Repository. A tag created with GITHUB_TOKEN does not fire `push`
+# workflows, so it is dispatched explicitly, on the tag, which is the only ref
+# the publish environment admits.
 
 on:
   workflow_dispatch: {}
@@ -74,8 +75,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     outputs:
       url: ${{ steps.r.outputs.url }}
+      publish: ${{ steps.p.outputs.result }}
     steps:
       # No checkout: the tag is created on the dispatched commit by SHA, so
       # nothing from the working tree is needed and no token is persisted.
@@ -99,6 +102,15 @@ jobs:
             --generate-notes \
             --latest
           echo "url=${{ github.server_url }}/${REPO}/releases/tag/${TAG}" >> "$GITHUB_OUTPUT"
+      - name: Dispatch the SAR publish
+        id: p
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh workflow run publish.yml --repo "$REPO" --ref "$TAG"
+          echo "result=dispatched" >> "$GITHUB_OUTPUT"
 
   # A job of its own: the action is pinned to a movable tag, so it runs where
   # no write token exists.
@@ -119,4 +131,5 @@ jobs:
           rows: |
             Release: ${{ needs.release.outputs.url && format('[{0}]({1})', needs.version.outputs.tag, needs.release.outputs.url) || '' }}
             SemanticVersion: ${{ needs.version.outputs.version }}
+            SAR publish: ${{ needs.release.outputs.publish && format('[{0}]({1}/{2}/actions/workflows/publish.yml)', needs.release.outputs.publish, github.server_url, github.repository) || 'not dispatched' }}
             Commit: ${{ github.sha }}

@@ -589,7 +589,8 @@ Test fixtures that must contain a forbidden shape assemble it at runtime; see
 `sam validate --lint`. It needs no AWS credentials and publishes nothing.
 
 `.github/workflows/release.yml` (**Create Release**, run by hand) tags `main`
-and creates the GitHub release; see below.
+and creates the GitHub release, then starts `.github/workflows/publish.yml`
+(**Publish to SAR**) on that tag; see below.
 
 ## Releasing
 
@@ -607,11 +608,22 @@ this repository being the source, and is not a release of this code.
    exists, runs the CI gates on that exact commit, then creates the tag and the
    GitHub release. There is no version input: the number is the one in the
    template, so the tag and the SAR version cannot disagree.
-4. Publish that tag to SAR, once per region that deploys it: a SAR application
-   exists only in the region it was published to. From a checkout of the tag,
-   `make release S3_BUCKET=<artifact bucket in that region> REGION=<region>` runs
-   every gate, builds in a container, checks the built artifact carries its
-   dependencies, packages, leak-checks the packaged template and publishes.
+4. Publishing follows on its own: Create Release dispatches **Publish to SAR**
+   on the new tag (so does pushing a `v*` tag by hand). It reruns the gates on
+   the tag, builds in a container, checks the built artifact carries its
+   dependencies, packages per region, leak-checks the packaged templates and
+   publishes to every region the application is listed in, skipping any region
+   that already has the version. To retry, run it again with the tag selected
+   under "Use workflow from".
+
+   AWS access is GitHub OIDC into a role that can only add versions to this
+   application. The role trusts the `sar-publish` environment, which admits
+   tags `v*` only, and the environment holds the role ARN and the artifact
+   bucket names as secrets. The publishing account id is masked in the logs.
+
+   Publishing from your own fork or account instead: from a checkout of the
+   tag, `make release S3_BUCKET=<artifact bucket in that region> REGION=<region>`,
+   once per region.
 
 ## Pinning a release
 
