@@ -1,0 +1,17 @@
+{
+  "defaults": {
+    "environment": "unknown",
+    "application": "unknown",
+    "organization": "default_org",
+    "username": "default_user"
+  },
+  "promote": [
+    {"from": "num_pages", "as": "num_pages", "type": "int"}
+  ],
+  "nested": {
+    "organization_user_context": {
+      "username": "username",
+      "organization": "organization"
+    }
+  }
+}

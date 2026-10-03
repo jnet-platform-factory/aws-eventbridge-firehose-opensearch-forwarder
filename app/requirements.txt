@@ -2,7 +2,7 @@
 # deploys from SAR must be the bytes that were tested, and `sam build` resolves
 # wheels with whatever interpreter is on PATH. pydantic-core is compiled per
 # Python version, so a mismatch ImportErrors at cold start, not at build time —
-# samconfig sets use_container for the same reason.
+# `make build` runs `sam build --use-container` for the same reason.
 aws-lambda-powertools==3.21.0
 pydantic==2.10.6
 opensearch-py>=2.4.0,<3.0.0

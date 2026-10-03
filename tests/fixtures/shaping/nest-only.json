@@ -1,0 +1,14 @@
+{
+  "defaults": {
+    "environment": "unknown",
+    "application": "unknown",
+    "organization": "default_org",
+    "username": "default_user"
+  },
+  "nested": {
+    "organization_user_context": {
+      "username": "username",
+      "organization": "organization"
+    }
+  }
+}

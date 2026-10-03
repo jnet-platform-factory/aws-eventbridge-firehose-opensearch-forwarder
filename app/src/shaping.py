@@ -1,14 +1,14 @@
 """The tenant seam — one EventBridge envelope in, one OpenSearch document out.
 
 Everything else in this service is tenant-agnostic. This module is the part that
-is allowed to vary, and in the copies this product replaces it was the *only*
-part that meaningfully did: comparing the JunctionNet and VIA forwarders line for
-line, `application.py` differed in 2 lines of 9 and `repositories.py` in 8 of 51,
-while the shaping differed in roughly half its lines.
+is allowed to vary, and in the hand-maintained copies this product replaces it
+was the *only* part that meaningfully did: comparing two of those forwarders
+line for line, `application.py` differed in 2 lines of 9 and `repositories.py`
+in 8 of 51, while the shaping differed in roughly half its lines.
 
 So the shaping is not code here. It is a declarative field map supplied per
-tenant as the `ShapingConfig` stack parameter, and this module is the interpreter
-for it. Three tenants, three config files, one deployed artifact.
+tenant as the `ShapingConfig` stack parameter, and this module is the
+interpreter for it: one config per tenant, one deployed artifact.
 
     {
       "defaults": {"application": "unknown", "organization": "default_org"},

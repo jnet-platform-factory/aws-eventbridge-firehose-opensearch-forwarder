@@ -1,0 +1,10 @@
+# The shaping half's dependencies, and nothing else.
+#
+# Deliberately NOT app/requirements.txt: opensearch-py, boto3 and
+# requests-aws4auth must stay absent here, because the suite proving the tenant
+# seam (test_shaping_standalone.py) is only meaningful if the delivery
+# dependencies genuinely are not installed. Add them and the test still passes
+# while the thing it protects has quietly gone.
+aws-lambda-powertools==3.21.0
+pydantic==2.10.6
+pytest>=8,<9

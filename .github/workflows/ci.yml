@@ -1,0 +1,74 @@
+name: CI
+
+# Every gate that needs no AWS credentials, on every pull request and push.
+# Nothing here deploys or publishes.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The Lambda runtime in template.yaml. pydantic-core is compiled per
+          # Python version, so testing on another one tests something else.
+          python-version: "3.13"
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      # First, and before any dependency is installed: it reads only the tree.
+      - name: Leak check
+        id: leak
+        env:
+          # Optional organisation-specific terms, kept out of the repository.
+          LEAK_CHECK_DENY: ${{ secrets.LEAK_CHECK_DENY }}
+        run: make leak-check
+
+      # Two lanes, in this order, because the first is only meaningful while the
+      # delivery dependencies are absent. See the Makefile.
+      - name: Install test dependencies (seam lane)
+        run: pip install -r tests/requirements.txt
+      - name: Unit tests (seam lane, no delivery dependencies)
+        id: test_seam
+        env:
+          PYTEST_ADDOPTS: --junitxml=${{ runner.temp }}/junit/seam.xml
+        run: make test
+      - name: Install full dependencies
+        run: pip install -r tests/requirements-full.txt
+      - name: Unit tests (full lane)
+        id: test_full
+        env:
+          PYTEST_ADDOPTS: --junitxml=${{ runner.temp }}/junit/full.xml
+        run: make test-full
+
+      - name: Check SAR metadata
+        id: metadata
+        run: make check-metadata
+      - name: Validate template
+        id: validate
+        run: make validate
+
+      - name: Summary
+        if: always()
+        continue-on-error: true
+        uses: jnet-platform-factory/.github/actions/job-summary@v0.0.1
+        with:
+          title: CI
+          status: ${{ job.status }}
+          rows: |
+            Branch: ${{ github.head_ref || github.ref_name }}
+            Leak check: ${{ steps.leak.outcome == 'success' && '✅ passed' || steps.leak.outcome == 'failure' && '❌ failed' || steps.leak.outcome == 'skipped' && '⏭️ skipped' || '🚫 cancelled' }}
+            Unit tests (seam lane): ${{ steps.test_seam.outcome == 'success' && '✅ passed' || steps.test_seam.outcome == 'failure' && '❌ failed' || steps.test_seam.outcome == 'skipped' && '⏭️ skipped' || '🚫 cancelled' }}
+            Unit tests (full lane): ${{ steps.test_full.outcome == 'success' && '✅ passed' || steps.test_full.outcome == 'failure' && '❌ failed' || steps.test_full.outcome == 'skipped' && '⏭️ skipped' || '🚫 cancelled' }}
+            SAR metadata: ${{ steps.metadata.outcome == 'success' && '✅ passed' || steps.metadata.outcome == 'failure' && '❌ failed' || steps.metadata.outcome == 'skipped' && '⏭️ skipped' || '🚫 cancelled' }}
+            sam validate: ${{ steps.validate.outcome == 'success' && '✅ passed' || steps.validate.outcome == 'failure' && '❌ failed' || steps.validate.outcome == 'skipped' && '⏭️ skipped' || '🚫 cancelled' }}
+          junit: ${{ runner.temp }}/junit/*.xml

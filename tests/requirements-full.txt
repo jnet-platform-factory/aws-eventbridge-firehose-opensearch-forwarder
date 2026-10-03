@@ -1,0 +1,12 @@
+# The full lane: everything the Lambda actually has.
+#
+# The default lane (requirements.txt) deliberately omits the delivery
+# dependencies so tests/test_shaping_standalone.py means something. But the
+# search API reads OpenSearch, so its tests cannot run there and skip. Both
+# lanes run in CI: the first proves the seam, the second proves the code.
+-r requirements.txt
+-r ../app/requirements.txt
+
+# Lambda provides boto3 at runtime, so app/requirements.txt correctly omits it.
+# A test runner is not Lambda.
+boto3

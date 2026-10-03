@@ -22,7 +22,10 @@ Metadata:
     LicenseUrl: LICENSE.txt
     ReadmeUrl: README.md
     Labels: ['eventbridge', 'observability', 'opensearch', 'firehose', 'serverless', 'events']
-    HomePageUrl: https://github.com/junctionnet/platform-infrastructure
+    # This repository, which is the product's source. These two links are the
+    # only thing a SAR reader can follow, so they must point somewhere every
+    # reader can open.
+    HomePageUrl: https://github.com/jnet-platform-factory/events-observability
     # 1.0.0-1.0.3 already exist, published 2026-07-05 from
     # platform-factory/events-observability -- the Lambda-only original this
     # descends from. A published SemanticVersion is immutable, so republishing
@@ -32,7 +35,7 @@ Metadata:
     # 1.4.0: DigestReservedConcurrency, so the stack can deploy in a Region
     # whose Lambda concurrency limit is too small to reserve any.
     SemanticVersion: 1.4.0
-    SourceCodeUrl: https://github.com/junctionnet/platform-infrastructure
+    SourceCodeUrl: https://github.com/jnet-platform-factory/events-observability
 
 Parameters:
   NamePrefix:
@@ -124,8 +127,8 @@ Parameters:
       not carve a slice out of the account pool". You need that in a Region whose
       Lambda concurrency limit is small: reserving even 1 is refused when it would
       drop unreserved concurrency below 10, and an unactivated Region defaults to
-      a limit of 10, so the reservation fails outright. CargoNaut's us-east-1 is
-      exactly this — limit 10, against 1000 in the Region they actually run in.
+      a limit of 10, so the reservation fails outright. A tenant hit exactly this
+      — limit 10 in a Region they do not run in, against 1000 in the one they do.
 
       Without a reservation the digest can run concurrently and the throttling
       guarantee weakens: you may get more than one email per minute during a
@@ -398,8 +401,9 @@ Resources:
   # stack declares nothing and every rule below simply names it, because two IaC
   # tools owning one bus means a CloudFormation rollback or stack delete can
   # destroy a resource the other tool believes it manages. That is not
-  # hypothetical: VIA moved bus ownership to Terraform by retain-then-import
-  # precisely so the physical bus was never recreated and its ARN never changed.
+  # hypothetical: one deployment moved bus ownership to Terraform by
+  # retain-then-import precisely so the physical bus was never recreated and its
+  # ARN never changed.
   #
   # `BusName` below is the single expression every other resource uses, so the
   # two cases stay indistinguishable downstream.

@@ -1,17 +1,5 @@
 # Serverless Events Observability
 
-> [!NOTE]
-> **This is a published-artifact mirror.**
->
-> The code here is exactly what Serverless Application Repository version
-> **1.4.0** ships. Development happens in `junctionnet/platform-infrastructure`
-> under `events-observability/`; this repository is refreshed automatically on
-> release and does not take pull requests.
->
-> The SAR application is shared with specific AWS accounts rather than published
-> publicly. If you are outside those accounts you can read this source, but the
-> application is not deployable by you.
-
 Every event on an EventBridge bus, indexed into OpenSearch and searchable —
 plus a throttled error-alert digest, dead-letter queues and alarms for the paths
 that can fail silently.
@@ -498,6 +486,99 @@ All of them publish to the `AlertsSnsTopicArn` output. **Subscribe something to
 it.** An SNS topic with no subscriptions accepts every publish and reports
 success, and `describe-alarm-history` will say "Successfully executed action"
 while nobody is told anything.
+
+## Developing
+
+This repository is the product's source: changes land here, by pull request.
+
+| Path | What it is |
+|---|---|
+| `app/` | The Lambda code. The only thing packaged: every function has `CodeUri: app/` |
+| `template.yaml` | The SAM template, and the SAR metadata, including `SemanticVersion` |
+| `tests/` | Unit tests. `tests/fixtures/shaping/` holds example `ShapingConfig` maps |
+| `scripts/` | Gates: the leak check, the SAR metadata check, the built-artifact check |
+| `Makefile` | Every command below. `make help` lists them |
+
+It holds no deployment's configuration. A deployment's `ShapingConfig`, stack
+parameters and runbooks belong in the repository that deploys it, next to the
+release it pins (see "Pinning a release").
+
+### Tests run in two lanes
+
+The difference is the installed packages, not the command:
+
+```bash
+# Lane 1, the seam: the delivery dependencies must be ABSENT. This is what proves
+# shaping.py imports without opensearch-py, boto3 or requests-aws4auth; the
+# search API tests skip here.
+python3.13 -m venv /tmp/eo-seam && . /tmp/eo-seam/bin/activate
+pip install -r tests/requirements.txt
+make test
+
+# Lane 2, everything the Lambda has, so the search API is covered.
+python3.13 -m venv /tmp/eo-full && . /tmp/eo-full/bin/activate
+pip install -r tests/requirements-full.txt
+make check        # sam validate, the full lane, the leak check, the SAR metadata check
+```
+
+Use Python 3.13, which is the Lambda runtime in `template.yaml`. pydantic-core is
+compiled per Python version, so a test run on another version tests something
+else.
+
+### The leak gate
+
+`make leak-check` scans the **whole** tree, not a published subset: in a public
+repository nothing is private. It refuses any 12-digit number that is not an AWS
+documentation placeholder, any email address outside the reserved example
+domains, credentials, and host CIDRs. Organisation-specific terms can be added
+without committing them: one per line in a git-ignored `.leak-check-deny` file,
+or comma-separated in the `LEAK_CHECK_DENY` environment variable (a CI secret).
+Test fixtures that must contain a forbidden shape assemble it at runtime; see
+`tests/test_leak_check.py`.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every pull request and on every push to
+`main`: the leak gate, both test lanes, the SAR metadata check and
+`sam validate --lint`. It needs no AWS credentials and publishes nothing.
+
+## Releasing
+
+A release is a git tag, `vX.Y.Z`, equal to the `SemanticVersion` in
+`template.yaml`. Version numbers come from the SAR listing: tag `v0.0.1` predates
+this repository being the source, and is not a release of this code.
+
+1. In the pull request, bump `SemanticVersion` in `template.yaml` and the version
+   in the quick start above. `make check-metadata` fails if they disagree. A
+   published version is immutable, so a version that has ever been published
+   cannot be reused.
+2. Merge to `main`.
+3. Tag the merge commit `vX.Y.Z` and push the tag.
+4. Publish that tag to SAR, once per region that deploys it: a SAR application
+   exists only in the region it was published to. From a checkout of the tag,
+   `make release S3_BUCKET=<artifact bucket in that region> REGION=<region>` runs
+   every gate, builds in a container, checks the built artifact carries its
+   dependencies, packages, leak-checks the packaged template and publishes.
+
+## Pinning a release
+
+Anything that builds or deploys this product pins a release; nothing tracks
+`main`.
+
+- **Deploying from SAR** — pin `SemanticVersion`, as in the quick start.
+- **Building from source** — pin a tag `vX.Y.Z`, or a full 40-character commit
+  SHA. A tag can be moved and a SHA cannot, so pin the SHA when the build must be
+  reproducible and record the tag beside it:
+
+  ```yaml
+  - uses: actions/checkout@v4
+    with:
+      repository: jnet-platform-factory/events-observability
+      ref: <full commit sha>   # vX.Y.Z
+      path: events-observability
+  ```
+
+Upgrading is then a reviewed change to that one pin in the deploying repository.
 
 ## Licence
 
