@@ -34,7 +34,10 @@ Metadata:
     # behaviour, and nothing was removed.
     # 1.4.0: DigestReservedConcurrency, so the stack can deploy in a Region
     # whose Lambda concurrency limit is too small to reserve any.
-    SemanticVersion: 1.4.0
+    # 1.5.0: CreateErrorAlerting, so a tenant who reads errors elsewhere can
+    # leave the whole digest pipeline out. Defaults to 'true', which resolves to
+    # exactly the 1.4.0 resources.
+    SemanticVersion: 1.5.0
     SourceCodeUrl: https://github.com/jnet-platform-factory/events-observability
 
 Parameters:
@@ -87,12 +90,36 @@ Parameters:
     Description: OpenSearch index name events are written to (auto-created on first write).
     AllowedPattern: '^[a-z0-9][a-z0-9._-]*$'
 
+  CreateErrorAlerting:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Whether this stack creates the error-alert digest: the rule matching
+      Error, ProcessingError and IntegrationError events, the queue and
+      dead-letter queue behind it, the digest function and the alerts SNS topic.
+
+      "true" (default): all of it is created, exactly as in earlier versions.
+
+      "false": none of it is. Use this when errors are already read somewhere
+      else — in OpenSearch, where the forwarder indexes them like every other
+      event, or through a rule of your own — and a digest email would only be a
+      second, noisier copy. AlertEmail and DigestReservedConcurrency are then
+      ignored, and the AlertsSnsTopicArn and ErrorAlertsQueueArn outputs are not
+      created.
+
+      Error events are still forwarded either way; this removes the digest, not
+      the events. The bus, forwarder and Firehose alarms are still created,
+      because they watch the delivery path rather than your events, but with no
+      actions: they change state in CloudWatch and notify nobody.
+
   AlertEmail:
     Type: String
     Default: ''
     Description: >
       Optional. An email address to subscribe to the alerts SNS topic. Leave
-      blank to wire up subscriptions yourself after deployment.
+      blank to wire up subscriptions yourself after deployment. Ignored when
+      CreateErrorAlerting is "false", since there is then no topic.
 
   EventBusName:
     Type: String
@@ -133,6 +160,8 @@ Parameters:
       Without a reservation the digest can run concurrently and the throttling
       guarantee weakens: you may get more than one email per minute during a
       storm. Raise the Region's limit and set this back to 1 if that matters.
+
+      Ignored when CreateErrorAlerting is "false", since there is then no digest.
 
   ForwarderRoleName:
     Type: String
@@ -354,6 +383,14 @@ Conditions:
   IsManagedDomain: !Equals [!Ref OpenSearchServiceName, 'es']
   HasRegionOverride: !Not [!Equals [!Ref OpenSearchRegion, '']]
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+  # The whole error-alert digest, and every reference to any part of it, is
+  # gated on this, so "false" leaves nothing pointing at a resource that does
+  # not exist. tests/test_template.py holds the template to that.
+  CreateErrorAlertingResources: !Equals [!Ref CreateErrorAlerting, 'true']
+  # An AlertEmail with no topic to subscribe it to is ignored, not an error.
+  CreateAlertEmailSubscription: !And
+    - !Condition HasAlertEmail
+    - !Condition CreateErrorAlertingResources
   IsFirehoseDelivery: !Equals [!Ref DeliveryMode, 'Firehose']
   CreateEventBus: !Equals [!Ref EventBusName, '']
   HasForwarderRoleName: !Not [!Equals [!Ref ForwarderRoleName, '']]
@@ -416,9 +453,14 @@ Resources:
 
   # ---------------------------------------------------------------------------
   # 2. Error alerting: EventBridge rule -> SQS (buffer) -> digest Lambda -> SNS.
+  #
+  # Sections 2-4 exist only under CreateErrorAlerting=true (the default). With
+  # it false none of them is created, and the alarms in section 6 keep their
+  # state but lose their actions, since the topic they notify is gone.
   # ---------------------------------------------------------------------------
   ErrorAlertsRule:
     Type: AWS::Events::Rule
+    Condition: CreateErrorAlertingResources
     Properties:
       Name: !Sub '${NamePrefix}-error-alerts-${EnvironmentName}'
       Description: Route error events to SQS for throttled digest alerts.
@@ -435,6 +477,7 @@ Resources:
 
   ErrorAlertsQueue:
     Type: AWS::SQS::Queue
+    Condition: CreateErrorAlertingResources
     Properties:
       QueueName: !Sub '${NamePrefix}-${EnvironmentName}-error-alerts-queue'
       VisibilityTimeout: 120
@@ -445,12 +488,14 @@ Resources:
 
   ErrorAlertsDLQ:
     Type: AWS::SQS::Queue
+    Condition: CreateErrorAlertingResources
     Properties:
       QueueName: !Sub '${NamePrefix}-${EnvironmentName}-error-alerts-dlq'
       MessageRetentionPeriod: 1209600
 
   ErrorAlertsQueuePolicy:
     Type: AWS::SQS::QueuePolicy
+    Condition: CreateErrorAlertingResources
     Properties:
       Queues:
         - !Ref ErrorAlertsQueue
@@ -471,12 +516,14 @@ Resources:
   # ---------------------------------------------------------------------------
   AlertsSnsTopic:
     Type: AWS::SNS::Topic
+    Condition: CreateErrorAlertingResources
     Properties:
       TopicName: !Sub '${NamePrefix}-alerts-${EnvironmentName}'
       DisplayName: Platform Alerts
 
   AlertsSnsTopicPolicy:
     Type: AWS::SNS::TopicPolicy
+    Condition: CreateErrorAlertingResources
     Properties:
       Topics:
         - !Ref AlertsSnsTopic
@@ -491,7 +538,7 @@ Resources:
 
   AlertsEmailSubscription:
     Type: AWS::SNS::Subscription
-    Condition: HasAlertEmail
+    Condition: CreateAlertEmailSubscription
     Properties:
       TopicArn: !Ref AlertsSnsTopic
       Protocol: email
@@ -503,6 +550,7 @@ Resources:
   # ---------------------------------------------------------------------------
   AlertDigestFunction:
     Type: AWS::Serverless::Function
+    Condition: CreateErrorAlertingResources
     Properties:
       FunctionName: !Sub '${NamePrefix}-alert-digest-${EnvironmentName}'
       Description: Sends a throttled SNS digest of error events buffered in SQS.
@@ -532,6 +580,7 @@ Resources:
 
   AlertDigestLogGroup:
     Type: AWS::Logs::LogGroup
+    Condition: CreateErrorAlertingResources
     Properties:
       LogGroupName: !Sub '/aws/lambda/${NamePrefix}-alert-digest-${EnvironmentName}'
       RetentionInDays: 30
@@ -990,10 +1039,14 @@ Resources:
       Threshold: 50
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertsSnsTopic
-      OKActions:
-        - !Ref AlertsSnsTopic
+      AlarmActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
+      OKActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
 
   EventBusThrottledRulesAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -1011,13 +1064,18 @@ Resources:
       Threshold: 10
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertsSnsTopic
-      OKActions:
-        - !Ref AlertsSnsTopic
+      AlarmActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
+      OKActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
 
   ErrorAlertsDlqDepthAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: CreateErrorAlertingResources
     Properties:
       AlarmName: !Sub '${NamePrefix}-ErrorAlerts-DLQ-Depth-${EnvironmentName}'
       AlarmDescription: Error alerts DLQ has messages — processing failures.
@@ -1060,8 +1118,10 @@ Resources:
       Threshold: 10000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertsSnsTopic
+      AlarmActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
 
   ForwarderErrorAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -1079,8 +1139,10 @@ Resources:
       Threshold: 100
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertsSnsTopic
+      AlarmActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
 
   ForwarderDurationAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -1098,8 +1160,10 @@ Resources:
       Threshold: 48000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertsSnsTopic
+      AlarmActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
 
   # --- Firehose delivery alarms (DeliveryMode=Firehose only) ---------------
   #
@@ -1127,10 +1191,14 @@ Resources:
       Threshold: 1
       ComparisonOperator: LessThanThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertsSnsTopic
-      OKActions:
-        - !Ref AlertsSnsTopic
+      AlarmActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
+      OKActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
 
   FirehoseDataFreshnessAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -1152,10 +1220,14 @@ Resources:
       Threshold: 900
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertsSnsTopic
-      OKActions:
-        - !Ref AlertsSnsTopic
+      AlarmActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
+      OKActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
 
   EventDeliveryDlqDepthAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -1174,8 +1246,10 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertsSnsTopic
+      AlarmActions: !If
+        - CreateErrorAlertingResources
+        - [!Ref AlertsSnsTopic]
+        - !Ref 'AWS::NoValue'
 
   # ---------------------------------------------------------------------------
   # 7. Search API (CreateSearchApi=true) — read side over the same index.
@@ -1325,10 +1399,12 @@ Outputs:
       - Bus: !If [CreateEventBus, !Sub '${NamePrefix}-events-${EnvironmentName}', !Ref EventBusName]
 
   AlertsSnsTopicArn:
+    Condition: CreateErrorAlertingResources
     Description: SNS topic ARN for alerts — subscribe email / Slack / PagerDuty.
     Value: !Ref AlertsSnsTopic
 
   ErrorAlertsQueueArn:
+    Condition: CreateErrorAlertingResources
     Description: Error alerts SQS queue ARN.
     Value: !GetAtt ErrorAlertsQueue.Arn
 

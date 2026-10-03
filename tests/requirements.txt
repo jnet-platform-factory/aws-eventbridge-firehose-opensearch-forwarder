@@ -8,3 +8,6 @@
 aws-lambda-powertools==3.21.0
 pydantic==2.10.6
 pytest>=8,<9
+# Reads template.yaml for tests/test_template.py. A test dependency, not a
+# delivery one, so it belongs in both lanes.
+PyYAML>=6,<7

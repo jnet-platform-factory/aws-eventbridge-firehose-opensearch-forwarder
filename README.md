@@ -1,8 +1,8 @@
 # Serverless Events Observability
 
 Every event on an EventBridge bus, indexed into OpenSearch and searchable —
-plus a throttled error-alert digest, dead-letter queues and alarms for the paths
-that can fail silently.
+plus a throttled error-alert digest (on by default, and optional), dead-letter
+queues and alarms for the paths that can fail silently.
 
 Deploys entirely into your own AWS account. Bring your own OpenSearch domain or
 Serverless collection; this stack does not provision one.
@@ -14,7 +14,7 @@ Resources:
     Properties:
       Location:
         ApplicationId: arn:aws:serverlessrepo:us-east-1:<account>:applications/serverless-events-observability
-        SemanticVersion: 1.4.0
+        SemanticVersion: 1.5.0
       Parameters:
         NamePrefix: acme
         EnvironmentName: prod
@@ -165,6 +165,9 @@ fails silently and convincingly — `describe-alarm-history` will report the act
 "successfully executed" into nothing. Set `AlertEmail`, then **confirm the
 subscription**; it sits in `PendingConfirmation` until someone clicks the link,
 and an unconfirmed subscription is the same as no subscription.
+
+If you do not want the alerting at all, set `CreateErrorAlerting=false` instead
+and skip this step — see "Leaving the error digest out".
 
 ## The document, and why its shape is configuration
 
@@ -334,6 +337,46 @@ Worth checking before you pick a Region — `aws lambda get-account-settings`
 in the one you intend to deploy to. A limit of 10 usually means nothing has ever
 run there, which is rarely where you want an event pipeline.
 
+### Leaving the error digest out
+
+`CreateErrorAlerting` decides whether the stack builds the error-alert digest at
+all. It defaults to `true`, and at `true` the stack is exactly what earlier
+versions deployed, so an existing deployment upgrades with no resource changes.
+
+Set it `false` when errors are already read somewhere else — typically in
+OpenSearch itself, where the forwarder indexes `Error`, `ProcessingError` and
+`IntegrationError` events like every other event — and a digest email would
+only be a second, noisier copy. The stack then creates none of:
+
+| Resource | What it was for |
+|---|---|
+| `ErrorAlertsRule` | Matches the three error detail-types on the bus |
+| `ErrorAlertsQueue`, `ErrorAlertsDLQ`, `ErrorAlertsQueuePolicy` | Buffers them for the digest |
+| `AlertDigestFunction`, `AlertDigestLogGroup` | Batches them into one notification a minute |
+| `AlertsSnsTopic`, `AlertsSnsTopicPolicy`, `AlertsEmailSubscription` | Delivers the notification |
+| `ErrorAlertsDlqDepthAlarm` | Watches the digest's own dead-letter queue |
+
+and the `AlertsSnsTopicArn` and `ErrorAlertsQueueArn` outputs go with them.
+`AlertEmail` and `DigestReservedConcurrency` are ignored, since there is no
+topic to subscribe to and no digest to reserve for.
+
+Two things it does **not** do:
+
+- **It does not stop error events being indexed.** Only the digest goes. The
+  forwarder never filtered on detail-type, so errors land in OpenSearch either
+  way.
+- **It does not remove the other alarms.** The bus, forwarder and Firehose
+  alarms watch the delivery path, not your events, and stay — but with no
+  actions, because the topic they notified is gone. They still change state in
+  CloudWatch, and every state change is still published to the account's
+  default bus as a `CloudWatch Alarm State Change` event if you want to route one
+  yourself.
+
+Switching an existing stack to `false` deletes the topic, so anything subscribed
+to it outside this stack stops receiving. Switching back to `true` creates a
+new topic with the same name, and its subscriptions start from nothing — an
+email subscription needs confirming again.
+
 ### Pinning the forwarder's role name
 
 `ForwarderRoleName` fixes the execution role's name instead of letting
@@ -486,6 +529,9 @@ All of them publish to the `AlertsSnsTopicArn` output. **Subscribe something to
 it.** An SNS topic with no subscriptions accepts every publish and reports
 success, and `describe-alarm-history` will say "Successfully executed action"
 while nobody is told anything.
+
+Under `CreateErrorAlerting=false` there is no topic: the DLQ-depth alarm goes
+with the queue it watched, and the rest are created with no actions.
 
 ## Developing
 
