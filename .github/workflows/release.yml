@@ -1,10 +1,15 @@
 name: Create Release
 
-# Tags main as vX.Y.Z and creates the GitHub release. X.Y.Z is not chosen here:
-# it is the SemanticVersion in template.yaml, because a release of this
-# repository and the SAR version built from it must carry the same number (see
-# "Releasing" in the README). Bump SemanticVersion in a pull request, merge,
-# then run this.
+# Bumps the version, tags main as vX.Y.Z and creates the GitHub release, the
+# same way as every other platform repository: Run workflow, pick patch, minor
+# or major.
+#
+# The version lives in template.yaml (SemanticVersion) and in the README quick
+# start, and a release of this repository and the SAR version built from it must
+# carry the same number (see "Releasing" in the README). So this workflow does
+# not just tag: it computes the next version from the current SemanticVersion,
+# writes it to both places in one "Release vX.Y.Z" commit on main, and tags that
+# commit. Nobody bumps the version by hand.
 #
 # Then it hands the tag to publish.yml, which publishes it to the Serverless
 # Application Repository. A tag created with GITHUB_TOKEN does not fire `push`
@@ -12,7 +17,17 @@ name: Create Release
 # the publish environment admits.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "How to bump the version?"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: read
@@ -26,17 +41,22 @@ jobs:
     name: Resolve version
     runs-on: ubuntu-latest
     outputs:
+      current: ${{ steps.v.outputs.current }}
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
     steps:
       - name: Refuse anything but main
         if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
         run: |
-          echo "::error::Releases are cut from main only; this run is on ${{ github.ref }}."
+          echo "::error::Releases are cut from main only; this run is on $REF."
           exit 1
       - uses: actions/checkout@v4
-      - name: Read SemanticVersion and check the tag is free
+      - name: Read SemanticVersion, bump it, check the tag is free
         id: v
+        env:
+          BUMP: ${{ inputs.bump_type }}
         run: |
           # The one SemanticVersion key in template.yaml (comments mention the
           # word but never as a key).
@@ -45,24 +65,42 @@ jobs:
             echo "::error::Expected exactly one SemanticVersion key in template.yaml, found $MATCHES."
             exit 1
           fi
-          VERSION=$(sed -nE 's/^[[:space:]]+SemanticVersion:[[:space:]]*([^[:space:]#]+).*/\1/p' template.yaml)
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::SemanticVersion '$VERSION' is not X.Y.Z."
+          CURRENT=$(sed -nE 's/^[[:space:]]+SemanticVersion:[[:space:]]*([^[:space:]#]+).*/\1/p' template.yaml)
+          if ! [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::SemanticVersion '$CURRENT' is not X.Y.Z."
+            exit 1
+          fi
+          MAJOR=${BASH_REMATCH[1]} MINOR=${BASH_REMATCH[2]} PATCH=${BASH_REMATCH[3]}
+          case "$BUMP" in
+            major) VERSION="$((MAJOR + 1)).0.0" ;;
+            minor) VERSION="$MAJOR.$((MINOR + 1)).0" ;;
+            patch) VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+            *) echo "::error::Unknown bump '$BUMP'."; exit 1 ;;
+          esac
+          # The quick start must name the current version exactly once, so the
+          # release commit can move it with the template (make check-metadata
+          # fails when they disagree).
+          QUICK=$(grep -cE "^[[:space:]]+SemanticVersion:[[:space:]]*${CURRENT//./\\.}[[:space:]]*$" README.md || true)
+          if [ "$QUICK" != "1" ]; then
+            echo "::error::Expected the README quick start to name SemanticVersion $CURRENT exactly once, found $QUICK."
             exit 1
           fi
           TAG="v$VERSION"
-          # A version is released once. Re-running without a bump is the usual
-          # mistake, and moving an existing tag would change what every pin on
-          # it builds.
+          # A version is released once, and a published SemanticVersion is
+          # immutable, so an existing tag is never reused or moved.
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
-            echo "::error::$TAG already exists. Bump SemanticVersion in template.yaml (and the quick start in README.md) in a pull request first."
+            echo "::error::$TAG already exists. Pick a bigger bump."
             exit 1
           fi
-          echo "Releasing $TAG from ${{ github.sha }}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG ($BUMP bump from $CURRENT)"
+          {
+            echo "current=$CURRENT"
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
 
-  # The same gates as every pull request, on the exact commit being tagged.
+  # The same gates as every pull request, on the commit being released. The
+  # release commit only changes the two version strings.
   check:
     name: Gates
     needs: [version]
@@ -70,7 +108,7 @@ jobs:
     secrets: inherit
 
   release:
-    name: Tag and release
+    name: Bump, tag and release
     needs: [version, check]
     runs-on: ubuntu-latest
     permissions:
@@ -78,18 +116,49 @@ jobs:
       actions: write
     outputs:
       url: ${{ steps.r.outputs.url }}
+      commit: ${{ steps.bump.outputs.commit }}
       publish: ${{ steps.p.outputs.result }}
     steps:
-      # No checkout: the tag is created on the dispatched commit by SHA, so
-      # nothing from the working tree is needed and no token is persisted.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Write the new version and commit it to main
+        id: bump
+        env:
+          CURRENT: ${{ needs.version.outputs.current }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          BUMP: ${{ inputs.bump_type }}
+        run: |
+          OLD="${CURRENT//./\\.}"
+          sed -i -E "s/^([[:space:]]+SemanticVersion:[[:space:]]*)${OLD}([[:space:]]*)$/\1${VERSION}\2/" template.yaml README.md
+          for f in template.yaml README.md; do
+            if ! grep -qE "^[[:space:]]+SemanticVersion:[[:space:]]*${VERSION//./\\.}[[:space:]]*$" "$f"; then
+              echo "::error::$f does not carry SemanticVersion $VERSION after the bump."
+              exit 1
+            fi
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $TAG" -m "$BUMP bump from $CURRENT: SemanticVersion in template.yaml and the README quick start."
+          # Fails if main moved since this run started; re-run to release from
+          # the new head.
+          if ! git push origin HEAD:main; then
+            echo "::error::main moved since this run started. Run Create Release again."
+            exit 1
+          fi
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Create tag and release
         id: r
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ steps.bump.outputs.commit }}
           REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
         run: |
           NOTES="SemanticVersion **${VERSION}**, commit \`${SHA}\`.
 
@@ -101,7 +170,8 @@ jobs:
             --notes "$NOTES" \
             --generate-notes \
             --latest
-          echo "url=${{ github.server_url }}/${REPO}/releases/tag/${TAG}" >> "$GITHUB_OUTPUT"
+          echo "url=${SERVER}/${REPO}/releases/tag/${TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Dispatch the SAR publish
         id: p
         env:
@@ -130,6 +200,6 @@ jobs:
           needs: ${{ toJSON(needs) }}
           rows: |
             Release: ${{ needs.release.outputs.url && format('[{0}]({1})', needs.version.outputs.tag, needs.release.outputs.url) || '' }}
-            SemanticVersion: ${{ needs.version.outputs.version }}
+            Bump: ${{ inputs.bump_type }}${{ needs.version.outputs.current && format(' · {0} → {1}', needs.version.outputs.current, needs.version.outputs.version) || '' }}
             SAR publish: ${{ needs.release.outputs.publish && format('[{0}]({1}/{2}/actions/workflows/publish.yml)', needs.release.outputs.publish, github.server_url, github.repository) || 'not dispatched' }}
-            Commit: ${{ github.sha }}
+            Release commit: ${{ needs.release.outputs.commit }}
