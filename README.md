@@ -638,7 +638,7 @@ Anything that builds or deploys this product pins a release; nothing tracks
   ```yaml
   - uses: actions/checkout@v4
     with:
-      repository: jnet-platform-factory/events-observability
+      repository: jnet-platform-factory/aws-eventbridge-opensearch
       ref: <full commit sha>   # vX.Y.Z
       path: events-observability
   ```

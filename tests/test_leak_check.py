@@ -47,7 +47,7 @@ MUST_NOT_CATCH = [
     "arn:aws:es:us-east-1:111122223333:domain/acme/*",
     "AlertEmail=ops@example.com",
     "noreply@example.org",
-    "https://github.com/jnet-platform-factory/events-observability",
+    "https://github.com/jnet-platform-factory/aws-eventbridge-opensearch",
     "SemanticVersion: 1.0.0",
     "arn:aws:serverlessrepo:us-east-1:<account>:applications/serverless-events-observability",
     "search-acme-xxxx.us-east-1.es.amazonaws.com",

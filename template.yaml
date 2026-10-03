@@ -25,7 +25,7 @@ Metadata:
     # This repository, which is the product's source. These two links are the
     # only thing a SAR reader can follow, so they must point somewhere every
     # reader can open.
-    HomePageUrl: https://github.com/jnet-platform-factory/events-observability
+    HomePageUrl: https://github.com/jnet-platform-factory/aws-eventbridge-opensearch
     # 1.0.0-1.0.3 already exist, published 2026-07-05 from
     # platform-factory/events-observability -- the Lambda-only original this
     # descends from. A published SemanticVersion is immutable, so republishing
@@ -38,7 +38,7 @@ Metadata:
     # leave the whole digest pipeline out. Defaults to 'true', which resolves to
     # exactly the 1.4.0 resources.
     SemanticVersion: 1.5.0
-    SourceCodeUrl: https://github.com/jnet-platform-factory/events-observability
+    SourceCodeUrl: https://github.com/jnet-platform-factory/aws-eventbridge-opensearch
 
 Parameters:
   NamePrefix:
