@@ -13,7 +13,7 @@ Resources:
     Type: AWS::Serverless::Application
     Properties:
       Location:
-        ApplicationId: arn:aws:serverlessrepo:us-east-1:<account>:applications/serverless-events-observability
+        ApplicationId: arn:aws:serverlessrepo:us-east-1:<account>:applications/AWS-EventBridge-Firehose-OpenSearch-Forwarder
         SemanticVersion: 1.5.0
       Parameters:
         NamePrefix: acme
@@ -25,6 +25,13 @@ Resources:
 
 That is a complete deployment. Publish to the bus it creates and documents start
 appearing in the index.
+
+**The application was renamed.** Up to 1.4.0 it was published as
+`serverless-events-observability`, which stays in SAR, frozen at 1.4.0. Every later
+version is published as `AWS-EventBridge-Firehose-OpenSearch-Forwarder`. A stack moves
+by pointing `ApplicationId` at the new name together with the new `SemanticVersion`;
+`NamePrefix` and every resource name are unchanged, so nothing is replaced by the
+rename itself.
 
 ## Onboarding a new deployment
 
@@ -638,7 +645,7 @@ Anything that builds or deploys this product pins a release; nothing tracks
   ```yaml
   - uses: actions/checkout@v4
     with:
-      repository: jnet-platform-factory/aws-eventbridge-opensearch
+      repository: jnet-platform-factory/aws-eventbridge-firehose-opensearch-forwarder
       ref: <full commit sha>   # vX.Y.Z
       path: events-observability
   ```

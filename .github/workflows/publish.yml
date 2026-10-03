@@ -22,6 +22,13 @@ name: Publish to SAR
 # A published SemanticVersion is immutable. Each region is skipped when it
 # already has the version, so re-running after a regional failure is the
 # normal path, not a hazard.
+#
+# The first publish of APP_NAME in a region creates the application there:
+# list-application-versions fails (NotFoundException, the application does not
+# exist yet), the skip check reads that as "not published", and `sam publish`
+# calls CreateApplication with the version. Later runs get ConflictException
+# from CreateApplication, which sam publish takes as "exists" and turns into
+# UpdateApplication plus CreateApplicationVersion.
 
 on:
   push:
@@ -82,7 +89,8 @@ jobs:
       us_west_1: ${{ steps.publish_us_west_1.outputs.result }}
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
-      APP_NAME: serverless-events-observability
+      # SAR keeps the case; the ARN ends in exactly this. See template.yaml.
+      APP_NAME: AWS-EventBridge-Firehose-OpenSearch-Forwarder
       BUCKET_US_EAST_1: ${{ secrets.SAR_ARTIFACT_BUCKET_US_EAST_1 }}
       BUCKET_US_WEST_1: ${{ secrets.SAR_ARTIFACT_BUCKET_US_WEST_1 }}
       LEAK_CHECK_DENY: ${{ secrets.LEAK_CHECK_DENY }}

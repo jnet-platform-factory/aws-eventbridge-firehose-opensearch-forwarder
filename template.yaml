@@ -8,7 +8,12 @@ Description: >
 
 Metadata:
   AWS::ServerlessRepo::Application:
-    Name: serverless-events-observability
+    # A new application from the release after 1.5.0. SAR names are immutable, so
+    # renaming means publishing under a new name: the first `sam publish` of it
+    # creates the application, once per region. The previous one,
+    # serverless-events-observability, stays published and frozen at 1.4.0.
+    # SAR keeps the case, so the ARN ends in exactly this string.
+    Name: AWS-EventBridge-Firehose-OpenSearch-Forwarder
     # SAR caps this at 256 characters, counted after YAML folds the block into
     # one line. `sam publish` rejects a longer one outright -- and does so after
     # build and package, so an over-long description costs a full CI run.
@@ -25,7 +30,7 @@ Metadata:
     # This repository, which is the product's source. These two links are the
     # only thing a SAR reader can follow, so they must point somewhere every
     # reader can open.
-    HomePageUrl: https://github.com/jnet-platform-factory/aws-eventbridge-opensearch
+    HomePageUrl: https://github.com/jnet-platform-factory/aws-eventbridge-firehose-opensearch-forwarder
     # 1.0.0-1.0.3 already exist, published 2026-07-05 from
     # platform-factory/events-observability -- the Lambda-only original this
     # descends from. A published SemanticVersion is immutable, so republishing
@@ -38,7 +43,7 @@ Metadata:
     # leave the whole digest pipeline out. Defaults to 'true', which resolves to
     # exactly the 1.4.0 resources.
     SemanticVersion: 1.5.0
-    SourceCodeUrl: https://github.com/jnet-platform-factory/aws-eventbridge-opensearch
+    SourceCodeUrl: https://github.com/jnet-platform-factory/aws-eventbridge-firehose-opensearch-forwarder
 
 Parameters:
   NamePrefix:
