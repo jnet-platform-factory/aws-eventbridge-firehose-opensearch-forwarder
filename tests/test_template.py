@@ -338,16 +338,53 @@ def test_false_keeps_the_delivery_alarms_without_actions(mode):
         assert "OKActions" not in spec["Properties"], name
 
 
-def test_false_does_not_touch_the_forwarder():
-    on = effective()[0]
-    off = effective({"CreateErrorAlerting": "false"})[0]
-    for name in (
-        "OpenSearchForwarderFunction",
-        "AllPlatformEventsToForwarderRule",
-        "ForwarderInvokePermission",
-        "OpenSearchForwarderLogGroup",
-    ):
+# The delivery path each mode creates, beyond the forwarder function itself.
+DELIVERY_PATH = {
+    "Lambda": ("AllPlatformEventsToForwarderRule", "ForwarderInvokePermission"),
+    "Firehose": (
+        "AllPlatformEventsToFirehoseRule",
+        "EventDeliveryStream",
+        "FirehoseDeliveryRole",
+        "EventsToFirehoseRole",
+        "EventDeliveryDlq",
+        "FailedDocumentBucket",
+    ),
+}
+
+
+@pytest.mark.parametrize("mode", ["Lambda", "Firehose"])
+def test_false_does_not_touch_the_forwarder(mode):
+    on = effective({"DeliveryMode": mode})[0]
+    off = effective({"CreateErrorAlerting": "false", "DeliveryMode": mode})[0]
+    for name in ("OpenSearchForwarderFunction", "OpenSearchForwarderLogGroup", *DELIVERY_PATH[mode]):
         assert off[name] == on[name], name
+
+
+# --------------------------------------------------------------------------
+# DeliveryMode defaults to Firehose; Lambda is kept by setting it
+# --------------------------------------------------------------------------
+def test_delivery_mode_defaults_to_firehose():
+    spec = load()["Parameters"]["DeliveryMode"]
+    assert spec["Default"] == "Firehose"
+    assert sorted(spec["AllowedValues"]) == ["Firehose", "Lambda"]
+
+
+def test_a_stack_with_every_default_delivers_through_firehose():
+    resources, outputs, _ = effective()
+    assert set(DELIVERY_PATH["Firehose"]) <= set(resources)
+    assert not set(DELIVERY_PATH["Lambda"]) & set(resources)
+    assert {"DeliveryStreamName", "FirehoseDeliveryRoleArn", "FailedDocumentBucketName"} <= set(outputs)
+
+
+def test_the_default_is_explicit_firehose():
+    assert effective() == effective({"DeliveryMode": "Firehose"})
+
+
+def test_explicit_lambda_keeps_the_per_event_path_and_nothing_of_firehose():
+    resources, outputs, _ = effective({"DeliveryMode": "Lambda"})
+    assert set(DELIVERY_PATH["Lambda"]) <= set(resources)
+    assert not set(DELIVERY_PATH["Firehose"]) & set(resources)
+    assert not {"DeliveryStreamName", "FirehoseDeliveryRoleArn", "FailedDocumentBucketName"} & set(outputs)
 
 
 # --------------------------------------------------------------------------
