@@ -1,0 +1,185 @@
+name: Publish to SAR
+
+# Publishes a release tag to the AWS Serverless Application Repository, in
+# every region it is listed in. Runs on:
+#
+#   - Create Release, which dispatches this on the tag it just made. A tag
+#     created with GITHUB_TOKEN does not fire `push` workflows (GitHub's guard
+#     against loops), so the dispatch is how a release reaches this file.
+#   - a v* tag pushed by hand;
+#   - Run workflow, choosing the tag (not a branch) under "Use workflow from".
+#
+# AWS access is GitHub OIDC into a role that can do nothing but upload this
+# application's artifacts and add versions to it. The role trusts the
+# `sar-publish` environment, and that environment admits tags v* only, so no
+# pull request, fork or branch can reach it.
+#
+# This repository is public and so are these logs. Nothing here may print the
+# publishing account id, which `sam publish` would otherwise do in every
+# application ARN: it is masked before the first AWS call. The role ARN and
+# the bucket names are environment secrets for the same reason.
+#
+# A published SemanticVersion is immutable. Each region is skipped when it
+# already has the version, so re-running after a regional failure is the
+# normal path, not a hazard.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Refuse anything but a release tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "::error::Publish runs on a vX.Y.Z tag; this run is on ${{ github.ref }}. Under 'Use workflow from', pick the tag."
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The tag must equal SemanticVersion
+        id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(sed -nE 's/^[[:space:]]+SemanticVersion:[[:space:]]*([^[:space:]#]+).*/\1/p' template.yaml)
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match SemanticVersion '$VERSION' in template.yaml. SAR would publish $VERSION under a tag that says otherwise."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  # The same gates as every pull request, on the tagged commit.
+  check:
+    name: Gates
+    needs: [resolve]
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  publish:
+    name: Publish
+    needs: [resolve, check]
+    runs-on: ubuntu-latest
+    environment: sar-publish
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      us_east_1: ${{ steps.publish_us_east_1.outputs.result }}
+      us_west_1: ${{ steps.publish_us_west_1.outputs.result }}
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      APP_NAME: serverless-events-observability
+      BUCKET_US_EAST_1: ${{ secrets.SAR_ARTIFACT_BUCKET_US_EAST_1 }}
+      BUCKET_US_WEST_1: ${{ secrets.SAR_ARTIFACT_BUCKET_US_WEST_1 }}
+      LEAK_CHECK_DENY: ${{ secrets.LEAK_CHECK_DENY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_SAR_ROLE_ARN }}
+          role-session-name: sar-publish-${{ github.run_id }}
+          aws-region: us-east-1
+          mask-aws-account-id: true
+
+      # Before anything that could print an ARN.
+      - name: Mask the account id
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$ACCOUNT"
+          echo "ACCOUNT=$ACCOUNT" >> "$GITHUB_ENV"
+
+      # In a container, so compiled dependencies match the Lambda runtime.
+      - name: Build
+        run: make build
+
+      # The check no other gate makes: that what is uploaded can start. A
+      # version once shipped without its dependencies and failed every cold
+      # start, having passed everything else.
+      - name: Check the built artifact carries its dependencies
+        run: make check-build
+
+      # A SAR application exists only in the region it was published to, and
+      # Lambda needs its code in the function's region, so each region gets its
+      # own package in its own bucket.
+      - name: Package (us-east-1)
+        run: make package S3_BUCKET="$BUCKET_US_EAST_1" REGION=us-east-1 PACKAGED=packaged-us-east-1.yaml
+      - name: Package (us-west-1)
+        run: make package S3_BUCKET="$BUCKET_US_WEST_1" REGION=us-west-1 PACKAGED=packaged-us-west-1.yaml
+
+      # Again, now that the packaged templates are in the tree: packaging
+      # rewrites CodeUri and is the last point anything can be caught.
+      - name: Leak check, including the packaged templates
+        run: make leak-check
+
+      - name: Publish (us-east-1)
+        id: publish_us_east_1
+        run: |
+          APP_ID="arn:aws:serverlessrepo:us-east-1:${ACCOUNT}:applications/${APP_NAME}"
+          if aws serverlessrepo list-application-versions --application-id "$APP_ID" --region us-east-1 \
+               --query "Versions[?SemanticVersion=='${VERSION}'].SemanticVersion" --output text 2>/dev/null \
+               | grep -qx "$VERSION"; then
+            echo "us-east-1 already has $VERSION; nothing to publish"
+            echo "result=already published" >> "$GITHUB_OUTPUT"
+          else
+            sam publish --template packaged-us-east-1.yaml --region us-east-1
+            echo "result=published" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish (us-west-1)
+        id: publish_us_west_1
+        run: |
+          APP_ID="arn:aws:serverlessrepo:us-west-1:${ACCOUNT}:applications/${APP_NAME}"
+          if aws serverlessrepo list-application-versions --application-id "$APP_ID" --region us-west-1 \
+               --query "Versions[?SemanticVersion=='${VERSION}'].SemanticVersion" --output text 2>/dev/null \
+               | grep -qx "$VERSION"; then
+            echo "us-west-1 already has $VERSION; nothing to publish"
+            echo "result=already published" >> "$GITHUB_OUTPUT"
+          else
+            sam publish --template packaged-us-west-1.yaml --region us-west-1
+            echo "result=published" >> "$GITHUB_OUTPUT"
+          fi
+
+  # A job of its own: the action is pinned to a movable tag, so it runs where
+  # there are no credentials. No ARNs in it: they carry the account id.
+  summary:
+    name: Summary
+    needs: [resolve, check, publish]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Summary
+        if: always()
+        continue-on-error: true
+        uses: jnet-platform-factory/.github/actions/job-summary@v0.0.1
+        with:
+          title: Publish to SAR — ${{ github.ref_name }}
+          needs: ${{ toJSON(needs) }}
+          rows: |
+            SemanticVersion: ${{ needs.resolve.outputs.version }}
+            us-east-1: ${{ needs.publish.outputs.us_east_1 || needs.publish.result }}
+            us-west-1: ${{ needs.publish.outputs.us_west_1 || needs.publish.result }}
+            Commit: ${{ github.sha }}
