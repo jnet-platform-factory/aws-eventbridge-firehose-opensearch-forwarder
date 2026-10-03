@@ -45,7 +45,7 @@ in the order you have to make it, and the two that are hard to reverse.
 |---|---|---|
 | What the resources are called | `NamePrefix`, `EnvironmentName` | **Yes** — renaming replaces the roles, and a role name may be written into a domain access policy in another account |
 | Which index | `OpenSearchIndex` | **Yes** — see below |
-| Per-event Lambda, or buffered Firehose | `DeliveryMode` | No — switch and redeploy |
+| Buffered Firehose (default), or per-event Lambda | `DeliveryMode` | No — switch and redeploy |
 | Whose rule feeds the forwarder | `CreateForwardingRule` | No |
 
 **The index is the one-way door.** An index with no explicit mapping takes each
@@ -73,8 +73,13 @@ OpenSearchResourceArn  arn:aws:es:us-east-1:111122223333:domain/acme/*
 `OpenSearchIndex` defaults to `${NamePrefix}-events`. Everything else has a
 working default.
 
-If your domain is in a **different account** from this stack, stop after this
-deploy and do step 2 before anything else.
+`DeliveryMode` defaults to `Firehose`. If your domain is in a **different
+account** from this stack, or its access policy names principals at all, add
+`FirehoseStreamEnabled=false` to this first deploy and do step 2 before anything
+else: Firehose refuses to create the stream until its delivery role is granted,
+and that role does not exist before this deploy. See "Firehose against a
+cross-account domain takes two deploys". On OpenSearch Serverless, set
+`DeliveryMode=Lambda` instead; see "OpenSearch Serverless".
 
 ### 2. Grant the stack's role on the domain
 
@@ -85,8 +90,8 @@ Take the role ARN from the stack outputs:
 
 | Output | When |
 |---|---|
+| `FirehoseDeliveryRoleArn` | `DeliveryMode=Firehose` (the default) |
 | `ForwarderRoleArn` | `DeliveryMode=Lambda` |
-| `FirehoseDeliveryRoleArn` | `DeliveryMode=Firehose` |
 
 and add it to the domain's access policy. Two things about doing this that cost
 real time to learn:
@@ -235,10 +240,10 @@ The coercers exist so that a careless emitter cannot decide your mapping.
 
 ## Delivery modes
 
-`DeliveryMode=Lambda` (default) invokes the forwarder once per event, which
-indexes one document per invocation. Simple, and fine at low volume.
+`DeliveryMode=Lambda` invokes the forwarder once per event, which indexes one
+document per invocation. Simple, and fine at low volume.
 
-`DeliveryMode=Firehose` points the rule at an Amazon Data Firehose stream.
+`DeliveryMode=Firehose` (default) points the rule at an Amazon Data Firehose stream.
 Firehose buffers records, calls the same function as a *transformation* (a batch
 in, shaped documents out), then bulk-indexes — and owns retry plus backup of
 rejected documents to S3. At volume this is the difference between N HTTP round
@@ -248,6 +253,31 @@ Firehose also fixes a real blind spot: a document OpenSearch rejects lands in
 `failed/<env>/` in the backup bucket and moves
 `DeliveryToAmazonOpenSearchService.Success`, which Firehose measures rather than
 this code — so it cannot be swallowed the way the per-event path swallows it.
+
+### The default changed to Firehose
+
+Up to and including 1.5.0, `DeliveryMode` defaulted to `Lambda`. From the next
+release it defaults to `Firehose`. **A stack that never set `DeliveryMode`
+switches to Firehose on its next update**: the per-event rule and its invoke
+permission are removed, and the stream, its two roles, the failed-document bucket
+and the delivery DLQ are created. To keep the per-event path, set
+`DeliveryMode=Lambda` explicitly before you update.
+
+Before relying on the new default, check three things:
+
+- **The domain must accept the Firehose delivery role.** That role is new, so a
+  domain whose access policy names principals rejects it. The update then fails
+  at `CreateDeliveryStream` and rolls back. Do the two deploys in "Firehose
+  against a cross-account domain takes two deploys", granting
+  `FirehoseDeliveryRoleArn` in between.
+- **OpenSearch Serverless is not supported in Firehose mode.** With
+  `OpenSearchServiceName=aoss`, set `DeliveryMode=Lambda`.
+- **Documents arrive later.** Allow about 2× `FirehoseBufferIntervalSeconds`, 120
+  seconds at the default 60, where Lambda mode indexes each event as it arrives. See
+  "Latency under Firehose is about 2× the buffer interval".
+
+A failed first deploy in Firehose mode leaves the failed-document bucket behind,
+because it is retained on purpose. Delete the empty bucket before you try again.
 
 ### Capabilities — and they differ by how you deploy
 
@@ -496,12 +526,14 @@ create:
 
 ## OpenSearch Serverless
 
-Set `OpenSearchServiceName=aoss` and point `OpenSearchResourceArn` at the
-collection. Add `ForwarderRoleArn` to a data access policy on the collection.
+Set `OpenSearchServiceName=aoss` and `DeliveryMode=Lambda`, and point
+`OpenSearchResourceArn` at the collection. Add `ForwarderRoleArn` to a data access
+policy on the collection.
 
-Firehose mode requires `es` — Firehose reaches a Serverless collection through a
-different destination block, which is not wired up here. Use Lambda mode for
-`aoss`.
+Firehose mode, the default, requires `es` — Firehose reaches a Serverless
+collection through a different destination block, which is not wired up here. Use
+Lambda mode for `aoss`, and set it explicitly: the default does not deploy against
+a collection.
 
 ## Verifying a deployment
 

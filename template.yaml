@@ -292,25 +292,37 @@ Parameters:
 
   DeliveryMode:
     Type: String
-    Default: Lambda
+    Default: Firehose
     AllowedValues: [Lambda, Firehose]
     Description: >
       How events get from the bus into OpenSearch.
+
+      "Firehose" (default): the rule targets an Amazon Data Firehose stream.
+      Firehose buffers records, invokes the forwarder as a data *transformation*
+      (a batch of raw EventBridge envelopes in, shaped documents out), then
+      bulk-indexes the result. Firehose owns buffering, bulk delivery, retry and
+      backup of failed documents to S3. Costs an S3 bucket, a stream and two IAM
+      roles.
 
       "Lambda": an EventBridge rule invokes the forwarder once per event and the
       function indexes that one document itself. No extra infrastructure, but it
       is one invocation and one single-document index call per event, and retry
       / failure handling is whatever the function implements.
 
-      "Firehose": the rule targets an Amazon Data Firehose stream. Firehose
-      buffers records, invokes the forwarder as a data *transformation* (a batch
-      of raw EventBridge envelopes in, shaped documents out), then bulk-indexes
-      the result. Firehose owns buffering, bulk delivery, retry and backup of
-      failed documents to S3. Costs an S3 bucket, a stream and two IAM roles.
+      **The default changed from "Lambda" to "Firehose" in the release after
+      1.5.0.** A stack that never set this parameter switches mode on its next
+      update. To keep the per-event path, set "Lambda" explicitly.
 
-      Firehose mode requires OpenSearchServiceName=es. Firehose reaches a
-      Serverless collection through a different destination block that is not
-      wired up here — use Lambda mode for aoss.
+      Two cases where the default does not deploy as it stands:
+
+        - A domain whose access policy names its principals (every cross-account
+          domain does): Firehose checks at CreateDeliveryStream that its delivery
+          role can reach the domain, and that role does not exist until this
+          stack creates it. Deploy with FirehoseStreamEnabled=false first; see
+          that parameter.
+        - OpenSearch Serverless (OpenSearchServiceName=aoss): Firehose reaches a
+          collection through a different destination block that is not wired up
+          here. Set "Lambda".
 
   FirehoseBufferSizeMBs:
     Type: Number
