@@ -42,7 +42,7 @@ Metadata:
     # 1.5.0: CreateErrorAlerting, so a tenant who reads errors elsewhere can
     # leave the whole digest pipeline out. Defaults to 'true', which resolves to
     # exactly the 1.4.0 resources.
-    SemanticVersion: 1.5.0
+    SemanticVersion: 1.6.0
     SourceCodeUrl: https://github.com/jnet-platform-factory/aws-eventbridge-firehose-opensearch-forwarder
 
 Parameters:

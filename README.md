@@ -14,7 +14,7 @@ Resources:
     Properties:
       Location:
         ApplicationId: arn:aws:serverlessrepo:us-east-1:<account>:applications/AWS-EventBridge-Firehose-OpenSearch-Forwarder
-        SemanticVersion: 1.5.0
+        SemanticVersion: 1.6.0
       Parameters:
         NamePrefix: acme
         EnvironmentName: prod
